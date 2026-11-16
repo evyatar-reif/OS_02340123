@@ -75,42 +75,72 @@ void _removeBackgroundSign(char *cmd_line) {
 
 // TODO: Add your implementation for classes in Commands.h 
 
-SmallShell::SmallShell() {
-    // TODO: add your implementation
-}
+Command::Command(const char *cmd_line) {}
+
+BuiltInCommand::BuiltInCommand(const char *cmd_line)
+    : Command(cmd_line) {}
+
+SmallShell::SmallShell() : m_prompt("smash") {}
 
 SmallShell::~SmallShell() {
     // TODO: add your implementation
+}
+
+void SmallShell::setPrompt(const std::string &newPrompt) {
+    m_prompt = newPrompt;
+}
+
+std::string SmallShell::getPrompt() const {
+    return m_prompt;
 }
 
 /**
 * Creates and returns a pointer to Command class which matches the given command line (cmd_line)
 */
 Command *SmallShell::CreateCommand(const char *cmd_line) {
-    // For example:
-    /*
     string cmd_s = _trim(string(cmd_line));
-    string firstWord = cmd_s.substr(0, cmd_s.find_first_of(" \n"));
+    string firstWord = cmd_s.substr(0, cmd_s.find_first_of(WHITESPACE));
 
-    if (firstWord.compare("pwd") == 0) {
-      return new GetCurrDirCommand(cmd_line);
+    if (firstWord.compare("chprompt") == 0) {
+        return new ChPromptCommand(cmd_line);
     }
-    else if (firstWord.compare("showpid") == 0) {
-      return new ShowPidCommand(cmd_line);
-    }
-    else if ...
-    .....
-    else {
-      return new ExternalCommand(cmd_line);
-    }
-    */
+
+    // if (firstWord.compare("pwd") == 0) {
+    //   return new GetCurrDirCommand(cmd_line);
+    // }
+    // else if (firstWord.compare("showpid") == 0) {
+    //   return new ShowPidCommand(cmd_line);
+    // }
+    // else if ...
+    // .....
+    // else {
+    //   return new ExternalCommand(cmd_line);
+    // }
     return nullptr;
 }
 
 void SmallShell::executeCommand(const char *cmd_line) {
     // TODO: Add your implementation here
-    // for example:
-    // Command* cmd = CreateCommand(cmd_line);
-    // cmd->execute();
+    Command* cmd = CreateCommand(cmd_line);
+    if (cmd == nullptr) {
+        return;
+    }
+    cmd->execute();
+    delete cmd;
     // Please note that you must fork smash process for some commands (e.g., external commands....)
 }
+
+// ------- ChPrompt --------------
+ChPromptCommand::ChPromptCommand(const char *cmd_line)
+    : BuiltInCommand(cmd_line), m_newPrompt("smash") {
+    std::istringstream input(cmd_line);
+    std::string commandName;
+    input >> commandName;
+    input >> m_newPrompt;
+}
+
+void ChPromptCommand::execute() {
+    SmallShell::getInstance().setPrompt(m_newPrompt);
+}
+
+

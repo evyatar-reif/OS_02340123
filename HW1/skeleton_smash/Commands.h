@@ -3,7 +3,7 @@
 #define SMASH_COMMAND_H_
 
 #include <vector>
-
+#include <string>
 #define COMMAND_MAX_LENGTH (200)
 #define COMMAND_MAX_ARGS (20)
 
@@ -12,7 +12,7 @@ class Command {
 public:
     Command(const char *cmd_line);
 
-    virtual ~Command();
+    virtual ~Command() = default;
 
     virtual void execute() = 0;
 
@@ -26,6 +26,15 @@ public:
 
     virtual ~BuiltInCommand() {
     }
+};
+
+class ChPromptCommand : public BuiltInCommand {
+    private:
+    std::string m_newPrompt;
+
+    public:
+    ChPromptCommand(const char *cmd_line);
+    void execute() override;
 };
 
 class ExternalCommand : public Command {
@@ -241,6 +250,7 @@ public:
 class SmallShell {
 private:
     // TODO: Add your data members
+    std::string m_prompt;
     SmallShell();
 
 public:
@@ -260,6 +270,9 @@ public:
     void executeCommand(const char *cmd_line);
 
     // TODO: add extra methods as needed
+    void setPrompt(const std::string &newPrompt);
+
+    std::string getPrompt() const;
 };
 
 #endif //SMASH_COMMAND_H_
