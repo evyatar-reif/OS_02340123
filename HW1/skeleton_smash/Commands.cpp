@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <iomanip>
 #include "Commands.h"
+#include <limits.h>
 
 using namespace std;
 
@@ -107,6 +108,9 @@ Command *SmallShell::CreateCommand(const char *cmd_line) {
     else if (firstWord.compare("showpid") == 0) {
       return new ShowPidCommand(cmd_line);
     }
+    else if (firstWord.compare("pwd") == 0) {
+      return new PwdCommand(cmd_line);
+    }
 
     // if (firstWord.compare("pwd") == 0) {
     //   return new GetCurrDirCommand(cmd_line);
@@ -148,8 +152,21 @@ void ChPromptCommand::execute() {
 
 // ------- ShowPidCommand --------------
 
-ShowPidCommand::ShowPidCommand(const char *cmd_line): BuiltInCommand(cmd_line) {};
+ShowPidCommand::ShowPidCommand(const char *cmd_line): BuiltInCommand(cmd_line) {}
 
 void ShowPidCommand::execute() {
     std::cout << "smash pid is "<< getpid() << std::endl;
-};
+}
+
+// ------- PwdCommand --------------
+
+PwdCommand::PwdCommand(const char *cmd_line): BuiltInCommand(cmd_line) {}
+
+void PwdCommand::execute() {
+    char buffer[PATH_MAX];
+    if (getcwd(buffer, PATH_MAX) != nullptr) {
+        std::cout << buffer << std::endl;
+        return;
+    }
+    perror("getcwd() error");
+}

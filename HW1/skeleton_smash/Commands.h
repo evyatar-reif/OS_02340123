@@ -37,6 +37,12 @@ class ChPromptCommand : public BuiltInCommand {
     void execute() override;
 };
 
+class PwdCommand : public BuiltInCommand {
+    public:
+    PwdCommand(const char *cmd_line);
+    void execute() override;
+};
+
 class ExternalCommand : public Command {
 public:
     ExternalCommand(const char *cmd_line);
