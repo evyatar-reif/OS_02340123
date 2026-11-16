@@ -103,6 +103,9 @@ Command *SmallShell::CreateCommand(const char *cmd_line) {
 
     if (firstWord.compare("chprompt") == 0) {
         return new ChPromptCommand(cmd_line);
+    } 
+    else if (firstWord.compare("showpid") == 0) {
+      return new ShowPidCommand(cmd_line);
     }
 
     // if (firstWord.compare("pwd") == 0) {
@@ -143,4 +146,10 @@ void ChPromptCommand::execute() {
     SmallShell::getInstance().setPrompt(m_newPrompt);
 }
 
+// ------- ShowPidCommand --------------
 
+ShowPidCommand::ShowPidCommand(const char *cmd_line): BuiltInCommand(cmd_line) {};
+
+void ShowPidCommand::execute() {
+    std::cout << "smash pid is "<< getpid() << std::endl;
+};
