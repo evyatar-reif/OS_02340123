@@ -108,8 +108,16 @@ public:
 };
 
 class ChangeDirCommand : public BuiltInCommand {
-    // TODO: Add your data members public:
-    ChangeDirCommand(const char *cmd_line, char **plastPwd);
+    enum ChangeDirType {
+        PATH, DASH, DOTDOT, NOOP
+    };
+    // TODO: Add your data members 
+    private:
+    ChangeDirType m_type;
+    std::string m_path;
+
+    public:
+    ChangeDirCommand(const char *cmd_line, const std::string &lastPwd);
 
     virtual ~ChangeDirCommand() {
     }
@@ -258,6 +266,7 @@ class SmallShell {
 private:
     // TODO: Add your data members
     std::string m_prompt;
+    std::string m_lastPwd;
     SmallShell();
 
 public:
@@ -278,8 +287,13 @@ public:
 
     // TODO: add extra methods as needed
     void setPrompt(const std::string &newPrompt);
-
     std::string getPrompt() const;
+
+    void setLastPwd(const std::string &newLastPwd);
+    std::string getLastPwd() const;
+
+    std::string getCwd() const;
+
 };
 
 #endif //SMASH_COMMAND_H_

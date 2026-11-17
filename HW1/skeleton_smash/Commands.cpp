@@ -11,6 +11,7 @@
 using namespace std;
 
 const std::string WHITESPACE = " \n\r\t\f\v";
+const std::string INVALID_PATH = "-1";
 
 #if 0
 #define FUNC_ENTRY()  \
@@ -81,7 +82,7 @@ Command::Command(const char *cmd_line) {}
 BuiltInCommand::BuiltInCommand(const char *cmd_line)
     : Command(cmd_line) {}
 
-SmallShell::SmallShell() : m_prompt("smash") {}
+SmallShell::SmallShell() : m_prompt("smash"), m_lastPwd(INVALID_PATH) {}
 
 SmallShell::~SmallShell() {
     // TODO: add your implementation
@@ -90,9 +91,15 @@ SmallShell::~SmallShell() {
 void SmallShell::setPrompt(const std::string &newPrompt) {
     m_prompt = newPrompt;
 }
-
 std::string SmallShell::getPrompt() const {
     return m_prompt;
+}
+
+void SmallShell::setLastPwd(const std::string &newLastPwd) {
+    m_lastPwd = newLastPwd;
+}
+std::string SmallShell::getLastPwd() const {
+    return m_lastPwd;
 }
 
 /**
@@ -110,6 +117,9 @@ Command *SmallShell::CreateCommand(const char *cmd_line) {
     }
     else if (firstWord.compare("pwd") == 0) {
       return new PwdCommand(cmd_line);
+    }
+    else if (firstWord.compare("cd") == 0) {
+      return new ChangeDirCommand(cmd_line, SmallShell::getLastPwd());
     }
 
     // if (firstWord.compare("pwd") == 0) {
@@ -162,11 +172,74 @@ void ShowPidCommand::execute() {
 
 PwdCommand::PwdCommand(const char *cmd_line): BuiltInCommand(cmd_line) {}
 
-void PwdCommand::execute() {
+std::string SmallShell::getCwd() const {
     char buffer[PATH_MAX];
-    if (getcwd(buffer, PATH_MAX) != nullptr) {
-        std::cout << buffer << std::endl;
+    if(getcwd(buffer, PATH_MAX) != nullptr) {
+        std::string path(buffer);
+        return path;
+    }
+    return INVALID_PATH;
+}
+
+void PwdCommand::execute() {
+    std::string cwd = SmallShell::getInstance().getCwd();
+    if (cwd != INVALID_PATH) {
+        std::cout << cwd << std::endl;
         return;
     }
-    perror("getcwd() error");
+    std::cerr << "getcwd() error" << std::endl;
+}
+
+// ------- ChangeDirCommand --------------
+
+ChangeDirCommand::ChangeDirCommand(const char *cmd_line, const std::string &lastPwd): BuiltInCommand(cmd_line), m_type(ChangeDirCommand::ChangeDirType::NOOP), m_path(INVALID_PATH) {
+    std::istringstream input(cmd_line);
+    std::string commandName;
+    std::string firstArg, secondArg;
+    
+    input >> commandName;
+    if (input >> firstArg) {
+        m_type = ChangeDirCommand::ChangeDirType::PATH;
+    }
+    if (input >> secondArg) {
+        std::cerr << "smash error: cd: too many arguments" << std::endl;
+        m_type = ChangeDirCommand::ChangeDirType::NOOP;
+        return;
+    }
+    
+    if (firstArg == "..") {
+        m_type = ChangeDirCommand::ChangeDirType::DOTDOT;
+        m_path = "..";
+    } else if (firstArg == "-") {
+        m_type = ChangeDirCommand::ChangeDirType::DASH;
+        m_path = lastPwd;
+    }
+
+    if (m_type == ChangeDirCommand::ChangeDirType::DASH && lastPwd == INVALID_PATH) {
+        std::cerr << "smash error: cd: OLDPWD not set" << std::endl;
+        m_type = ChangeDirCommand::ChangeDirType::NOOP;
+        return;
+    }
+
+    if (m_type == ChangeDirCommand::ChangeDirType::PATH) {
+        m_path = firstArg;
+    }
+}
+
+void ChangeDirCommand::execute() {
+    if (m_type == ChangeDirCommand::ChangeDirType::NOOP) {
+        return;
+    }
+
+    std::string cwd = SmallShell::getInstance().getCwd();
+    if (cwd == INVALID_PATH) {
+        std::perror("smash error: getcwd failed");
+        return;
+    }
+    if (chdir(m_path.c_str()) != 0) {
+        std::perror("smash error: chdir failed");
+        return;
+    }
+
+    SmallShell::getInstance().setLastPwd(cwd);
 }
