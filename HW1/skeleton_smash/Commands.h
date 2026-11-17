@@ -44,6 +44,8 @@ class PwdCommand : public BuiltInCommand {
 };
 
 class ExternalCommand : public Command {
+    private:
+    char *m_args[COMMAND_MAX_ARGS + 2];
 public:
     ExternalCommand(const char *cmd_line);
 
@@ -191,6 +193,7 @@ public:
 
 class JobsCommand : public BuiltInCommand {
     // TODO: Add your data members
+    JobsList *m_jobs;
 public:
     JobsCommand(const char *cmd_line, JobsList *jobs);
 

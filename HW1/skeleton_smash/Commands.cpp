@@ -120,20 +120,9 @@ Command *SmallShell::CreateCommand(const char *cmd_line) {
     }
     else if (firstWord.compare("cd") == 0) {
       return new ChangeDirCommand(cmd_line, SmallShell::getLastPwd());
-    }
+    } 
 
-    // if (firstWord.compare("pwd") == 0) {
-    //   return new GetCurrDirCommand(cmd_line);
-    // }
-    // else if (firstWord.compare("showpid") == 0) {
-    //   return new ShowPidCommand(cmd_line);
-    // }
-    // else if ...
-    // .....
-    // else {
-    //   return new ExternalCommand(cmd_line);
-    // }
-    return nullptr;
+    return new ExternalCommand(cmd_line);
 }
 
 void SmallShell::executeCommand(const char *cmd_line) {
@@ -233,7 +222,7 @@ void ChangeDirCommand::execute() {
 
     std::string cwd = SmallShell::getInstance().getCwd();
     if (cwd == INVALID_PATH) {
-        std::perror("smash error: getcwd failed");
+        std::perror("smash error: getcwd failed"); 
         return;
     }
     if (chdir(m_path.c_str()) != 0) {
@@ -242,4 +231,25 @@ void ChangeDirCommand::execute() {
     }
 
     SmallShell::getInstance().setLastPwd(cwd);
+}
+
+// ------- ExternalCommand --------------
+
+ExternalCommand::ExternalCommand(const char *cmd_line): Command(cmd_line), m_args() {
+    // populate m_args, 
+    _parseCommandLine(cmd_line, m_args);
+}
+
+void ExternalCommand::execute() {
+    // currently assume only simple external commands
+    pid_t pid = fork();
+    if (pid == 0) {
+        execvp(m_args[0], m_args);
+        std::perror("external command failed.");
+        _exit(1);
+    } else if (pid == -1) {
+        std::perror("fork failed");
+    } else {
+        waitpid(pid, NULL, 0);
+    }
 }
