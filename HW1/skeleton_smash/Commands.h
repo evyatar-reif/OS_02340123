@@ -9,6 +9,13 @@
 #define COMMAND_MAX_LENGTH (200)
 #define COMMAND_MAX_ARGS (20)
 
+class ErrorReporter
+{
+public:
+    void smash(const char *operation) const;
+    void regular(const char *message) const;
+};
+
 class Command
 {
 protected:
@@ -233,11 +240,11 @@ public:
 
     void removeFinishedJobs();
 
-    JobEntry *getJobById(int jobId);
+    JobEntry *getJobById(const int jobId);
 
     void removeJobById(int jobId);
 
-    JobEntry *getLastJob(int *lastJobId);
+    JobEntry *getMaxJob();
 
     JobEntry *getLastStoppedJob(int *jobId);
 
@@ -280,6 +287,10 @@ public:
 class ForegroundCommand : public BuiltInCommand
 {
     // TODO: Add your data members
+    int m_jib;
+    JobsList::JobEntry *m_foundJob;
+    JobsList *m_jobs;
+
 public:
     ForegroundCommand(const char *cmd_line, JobsList *jobs);
 

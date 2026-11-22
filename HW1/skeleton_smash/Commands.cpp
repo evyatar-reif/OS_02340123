@@ -15,6 +15,21 @@
 
 using namespace std;
 
+const ErrorReporter Error;
+
+void ErrorReporter::smash(const char *operation) const
+{
+    const int errorNumber = errno;
+    const std::string message = std::string("smash error: ") + operation + " failed";
+    errno = errorNumber;
+    std::perror(message.c_str());
+}
+
+void ErrorReporter::regular(const char *message) const
+{
+    std::cerr << "smash error: " << message << std::endl;
+}
+
 const std::string WHITESPACE = " \n\r\t\f\v";
 const std::string INVALID_PATH = "-1";
 
@@ -171,10 +186,13 @@ Command *SmallShell::CreateCommand(const char *cmd_line)
     {
         return new ChangeDirCommand(cmd_s.c_str(), SmallShell::getLastPwd());
     }
-
     else if (firstWord.compare("jobs") == 0)
     {
         return new JobsCommand(cmd_s.c_str(), &m_jobsList);
+    }
+    else if (firstWord.compare("fg") == 0)
+    {
+        return new ForegroundCommand(cmd_s.c_str(), &m_jobsList);
     }
 
     return new ExternalCommand(cmd_line, cmd_s.c_str(), isBackground);
@@ -228,6 +246,7 @@ std::string SmallShell::getCwd() const
         std::string path(buffer);
         return path;
     }
+    Error.smash("getcwd");
     return INVALID_PATH;
 }
 
@@ -239,7 +258,6 @@ void PwdCommand::execute()
         std::cout << cwd << std::endl;
         return;
     }
-    std::cerr << "getcwd() error" << std::endl;
 }
 
 // ------- ChangeDirCommand --------------
@@ -257,7 +275,7 @@ ChangeDirCommand::ChangeDirCommand(const char *cmd_line, const std::string &last
     }
     if (input >> secondArg)
     {
-        std::cerr << "smash error: cd: too many arguments" << std::endl;
+        Error.regular("cd: too many arguments");
         m_type = ChangeDirCommand::ChangeDirType::NOOP;
         return;
     }
@@ -275,7 +293,7 @@ ChangeDirCommand::ChangeDirCommand(const char *cmd_line, const std::string &last
 
     if (m_type == ChangeDirCommand::ChangeDirType::DASH && lastPwd == INVALID_PATH)
     {
-        std::cerr << "smash error: cd: OLDPWD not set" << std::endl;
+        Error.regular("cd: OLDPWD not set");
         m_type = ChangeDirCommand::ChangeDirType::NOOP;
         return;
     }
@@ -296,12 +314,11 @@ void ChangeDirCommand::execute()
     std::string cwd = SmallShell::getInstance().getCwd();
     if (cwd == INVALID_PATH)
     {
-        std::perror("smash error: getcwd failed");
         return;
     }
     if (chdir(m_path.c_str()) != 0)
     {
-        std::perror("smash error: chdir failed");
+        Error.smash("chdir");
         return;
     }
 
@@ -341,14 +358,18 @@ void ExternalCommand::execute()
     pid_t pid = fork();
     if (pid == 0)
     {
-        setpgrp();
+        if (setpgrp() == -1)
+        {
+            Error.smash("setpgrp");
+            _exit(1);
+        }
         execvp(m_args[0], m_args);
-        std::perror("smash error: execvp failed");
+        Error.smash("execvp");
         _exit(1);
     }
     else if (pid == -1)
     {
-        std::perror("smash error: fork failed");
+        Error.smash("fork");
         return;
     }
     else
@@ -358,7 +379,16 @@ void ExternalCommand::execute()
             SmallShell::getInstance().addJob(getCmdLine(), pid);
             return;
         }
-        waitpid(pid, NULL, 0);
+        pid_t result;
+        do
+        {
+            result = waitpid(pid, nullptr, 0);
+        } while (result == -1 && errno == EINTR);
+
+        if (result == -1)
+        {
+            Error.smash("waitpid");
+        }
     }
 }
 
@@ -472,12 +502,13 @@ void JobsList::removeFinishedJobs()
 
         if (result == -1)
         {
-            if (errno == ECHILD)
+            const int waitError = errno;
+            Error.smash("waitpid");
+            if (waitError == ECHILD)
             {
                 removeJobById(job.getJobId());
                 continue;
             }
-            std::perror("smash error: waitpid failed");
         }
         if (result > 0)
         {
@@ -492,5 +523,91 @@ void JobsList::removeFinishedJobs()
             }
         }
         ++index;
+    }
+}
+
+JobsList::JobEntry *JobsList::getJobById(const int jid)
+{
+    for (JobEntry &job : m_jobs)
+    {
+        if (job.getJobId() == jid)
+        {
+            return &job;
+        }
+    }
+    return nullptr;
+}
+
+// ------- ForegroundCommand --------------
+
+JobsList::JobEntry *JobsList::getMaxJob()
+{
+    JobEntry *maxJob = nullptr;
+    for (JobEntry &job : m_jobs)
+    {
+        if (maxJob == nullptr || job.getJobId() > maxJob->getJobId())
+        {
+            maxJob = &job;
+        }
+    }
+    return maxJob;
+}
+
+ForegroundCommand::ForegroundCommand(const char *cmd_line, JobsList *jobs)
+    : BuiltInCommand(cmd_line), m_jib(0), m_foundJob(nullptr), m_jobs(jobs)
+{
+    // ASKED A QUESTION IN THE PIAZZA ABOUT THE ERROR MESSAGES - DO NOT SUBMIT WITHOUT MAKING SURE IT FITS THE GIVEN ANSWER
+    std::istringstream input(cmd_line);
+    std::string commandName, jobArgument, extraArgument;
+    input >> commandName;
+    if (!(input >> jobArgument))
+    {
+        // maximal job will always be the last one
+        m_foundJob = m_jobs->getMaxJob();
+        if (m_foundJob == nullptr)
+        {
+            Error.regular("fg: jobs list is empty");
+        }
+        return;
+    }
+
+    std::istringstream jid(jobArgument);
+    // fail if there's an extra arg, or jid isn't a number, or a non valid job id
+    if ((input >> extraArgument) || !(jid >> m_jib) || !jid.eof())
+    {
+        Error.regular("fg: invalid arguments");
+        return;
+    }
+
+    m_foundJob = m_jobs->getJobById(m_jib);
+
+    if (m_foundJob == nullptr)
+    {
+        std::string message = "fg: job-id " + std::to_string(m_jib) + " does not exist";
+        Error.regular(message.c_str());
+    }
+}
+
+void ForegroundCommand::execute()
+{
+    if (m_foundJob == nullptr)
+    {
+        return;
+    }
+    // wait for command to finish - moved to foreground.
+    pid_t pid = m_foundJob->getPid();
+    pid_t result;
+
+    std::cout << m_foundJob->getCmdLine() << " " << m_foundJob->getPid() << std::endl;
+    m_jobs->removeJobById(m_foundJob->getJobId());
+
+    do
+    {
+        result = waitpid(pid, nullptr, 0);
+    } while (result == -1 && errno == EINTR);
+
+    if (result == -1)
+    {
+        Error.smash("waitpid");
     }
 }

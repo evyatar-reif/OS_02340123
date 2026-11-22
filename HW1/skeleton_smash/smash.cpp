@@ -5,16 +5,20 @@
 #include "Commands.h"
 #include "signals.h"
 
-int main(int argc, char *argv[]) {
-    if (signal(SIGINT, ctrlCHandler) == SIG_ERR) {
-        perror("smash error: failed to set ctrl-C handler");
+const ErrorReporter Error;
+
+int main(int argc, char *argv[])
+{
+    if (signal(SIGINT, ctrlCHandler) == SIG_ERR)
+    {
+        Error.smash("signal");
     }
 
-    //TODO: setup sig alarm handler (timeout bonus)
-
+    // TODO: setup sig alarm handler (timeout bonus)
 
     SmallShell &smash = SmallShell::getInstance();
-    while (true) {
+    while (true)
+    {
         std::cout << smash.getPrompt() << "> ";
         std::string cmd_line;
         std::getline(std::cin, cmd_line);
