@@ -9,12 +9,16 @@
 #define COMMAND_MAX_LENGTH (200)
 #define COMMAND_MAX_ARGS (20)
 
-class ErrorReporter
+class MessageReporter
 {
 public:
-    void smash(const char *operation) const;
-    void regular(const char *message) const;
+    void serr(const char *operation) const;
+    void rerr(const char *message) const;
+    void smsg(const char *message) const;
+    void msg(const char *message) const;
 };
+
+extern const MessageReporter Msg;
 
 class Command
 {
@@ -195,7 +199,11 @@ class JobsList;
 
 class QuitCommand : public BuiltInCommand
 {
-    // TODO: Add your data members public:
+private:
+    bool m_isKill;
+    JobsList *m_jobs;
+
+public:
     QuitCommand(const char *cmd_line, JobsList *jobs);
 
     virtual ~QuitCommand()
@@ -250,6 +258,8 @@ public:
 
     // TODO: Add extra methods or modify exisitng ones as needed
     void updateCurrentJobId();
+
+    int getSize() const;
 
 private:
     int m_currentJid;

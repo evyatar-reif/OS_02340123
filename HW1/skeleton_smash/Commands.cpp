@@ -1,4 +1,5 @@
 #include <unistd.h>
+#include <cstdlib>
 #include <algorithm>
 #include <cerrno>
 #include <cstddef>
@@ -11,13 +12,14 @@
 #include <iomanip>
 #include "Commands.h"
 #include <limits.h>
+#include <signal.h>
 #include <ostream>
 
 using namespace std;
 
-const ErrorReporter Error;
+const MessageReporter Msg;
 
-void ErrorReporter::smash(const char *operation) const
+void MessageReporter::serr(const char *operation) const
 {
     const int errorNumber = errno;
     const std::string message = std::string("smash error: ") + operation + " failed";
@@ -25,9 +27,19 @@ void ErrorReporter::smash(const char *operation) const
     std::perror(message.c_str());
 }
 
-void ErrorReporter::regular(const char *message) const
+void MessageReporter::rerr(const char *message) const
 {
     std::cerr << "smash error: " << message << std::endl;
+}
+
+void MessageReporter::smsg(const char *message) const
+{
+    std::cout << "smash: " << message << std::endl;
+}
+
+void MessageReporter::msg(const char *message) const
+{
+    std::cout << message << std::endl;
 }
 
 const std::string WHITESPACE = " \n\r\t\f\v";
@@ -194,6 +206,10 @@ Command *SmallShell::CreateCommand(const char *cmd_line)
     {
         return new ForegroundCommand(cmd_s.c_str(), &m_jobsList);
     }
+    else if (firstWord.compare("quit") == 0)
+    {
+        return new QuitCommand(cmd_s.c_str(), &m_jobsList);
+    }
 
     return new ExternalCommand(cmd_line, cmd_s.c_str(), isBackground);
 }
@@ -246,7 +262,7 @@ std::string SmallShell::getCwd() const
         std::string path(buffer);
         return path;
     }
-    Error.smash("getcwd");
+    Msg.serr("getcwd");
     return INVALID_PATH;
 }
 
@@ -275,7 +291,7 @@ ChangeDirCommand::ChangeDirCommand(const char *cmd_line, const std::string &last
     }
     if (input >> secondArg)
     {
-        Error.regular("cd: too many arguments");
+        Msg.rerr("cd: too many arguments");
         m_type = ChangeDirCommand::ChangeDirType::NOOP;
         return;
     }
@@ -293,7 +309,7 @@ ChangeDirCommand::ChangeDirCommand(const char *cmd_line, const std::string &last
 
     if (m_type == ChangeDirCommand::ChangeDirType::DASH && lastPwd == INVALID_PATH)
     {
-        Error.regular("cd: OLDPWD not set");
+        Msg.rerr("cd: OLDPWD not set");
         m_type = ChangeDirCommand::ChangeDirType::NOOP;
         return;
     }
@@ -318,7 +334,7 @@ void ChangeDirCommand::execute()
     }
     if (chdir(m_path.c_str()) != 0)
     {
-        Error.smash("chdir");
+        Msg.serr("chdir");
         return;
     }
 
@@ -360,16 +376,16 @@ void ExternalCommand::execute()
     {
         if (setpgrp() == -1)
         {
-            Error.smash("setpgrp");
+            Msg.serr("setpgrp");
             _exit(1);
         }
         execvp(m_args[0], m_args);
-        Error.smash("execvp");
+        Msg.serr("execvp");
         _exit(1);
     }
     else if (pid == -1)
     {
-        Error.smash("fork");
+        Msg.serr("fork");
         return;
     }
     else
@@ -387,7 +403,7 @@ void ExternalCommand::execute()
 
         if (result == -1)
         {
-            Error.smash("waitpid");
+            Msg.serr("waitpid");
         }
     }
 }
@@ -503,7 +519,7 @@ void JobsList::removeFinishedJobs()
         if (result == -1)
         {
             const int waitError = errno;
-            Error.smash("waitpid");
+            Msg.serr("waitpid");
             if (waitError == ECHILD)
             {
                 removeJobById(job.getJobId());
@@ -566,7 +582,7 @@ ForegroundCommand::ForegroundCommand(const char *cmd_line, JobsList *jobs)
         m_foundJob = m_jobs->getMaxJob();
         if (m_foundJob == nullptr)
         {
-            Error.regular("fg: jobs list is empty");
+            Msg.rerr("fg: jobs list is empty");
         }
         return;
     }
@@ -575,7 +591,7 @@ ForegroundCommand::ForegroundCommand(const char *cmd_line, JobsList *jobs)
     // fail if there's an extra arg, or jid isn't a number, or a non valid job id
     if ((input >> extraArgument) || !(jid >> m_jib) || !jid.eof())
     {
-        Error.regular("fg: invalid arguments");
+        Msg.rerr("fg: invalid arguments");
         return;
     }
 
@@ -584,7 +600,7 @@ ForegroundCommand::ForegroundCommand(const char *cmd_line, JobsList *jobs)
     if (m_foundJob == nullptr)
     {
         std::string message = "fg: job-id " + std::to_string(m_jib) + " does not exist";
-        Error.regular(message.c_str());
+        Msg.rerr(message.c_str());
     }
 }
 
@@ -608,6 +624,49 @@ void ForegroundCommand::execute()
 
     if (result == -1)
     {
-        Error.smash("waitpid");
+        Msg.serr("waitpid");
     }
+}
+
+// ------- QuitCommand --------------
+
+QuitCommand::QuitCommand(const char *cmd_line, JobsList *jobs) : BuiltInCommand(cmd_line), m_isKill(false), m_jobs(jobs)
+{
+    std::istringstream input(cmd_line);
+    std::string commandName, killArgument;
+    input >> commandName;
+
+    m_isKill = ((input >> killArgument) && killArgument == "kill");
+}
+
+void QuitCommand::execute()
+{
+    if (m_isKill)
+    {
+        m_jobs->killAllJobs();
+    }
+
+    std::exit(0);
+}
+
+int JobsList::getSize() const
+{
+    return static_cast<int>(m_jobs.size());
+}
+
+void JobsList::killAllJobs()
+{
+    const std::string msg = "sending SIGKILL signal to " + std::to_string(m_jobs.size()) + " jobs:";
+    Msg.smsg(msg.c_str());
+
+    for (JobEntry &job : m_jobs)
+    {
+        const std::string jobMsg = std::to_string(job.getPid()) + ": " + job.getCmdLine();
+        Msg.msg(jobMsg.c_str());
+        if (kill(job.getPid(), SIGKILL) == -1)
+        {
+            Msg.serr("kill");
+        }
+    }
+    updateCurrentJobId();
 }

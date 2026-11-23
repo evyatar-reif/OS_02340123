@@ -5,13 +5,11 @@
 #include "Commands.h"
 #include "signals.h"
 
-const ErrorReporter Error;
-
 int main(int argc, char *argv[])
 {
     if (signal(SIGINT, ctrlCHandler) == SIG_ERR)
     {
-        Error.smash("signal");
+        Msg.serr("signal");
     }
 
     // TODO: setup sig alarm handler (timeout bonus)
