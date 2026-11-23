@@ -1,5 +1,6 @@
 #include <regex>
 #include <tuple>
+#include <sys/stat.h>
 #include <unordered_set>
 #include <unistd.h>
 #include <cstdlib>
@@ -309,6 +310,10 @@ Command *SmallShell::CreateCommand(const char *cmd_line)
     else if (firstWord == "unsetenv")
     {
         return new UnSetEnvCommand(cmd_s.c_str());
+    }
+    else if (firstWord == "getfiletype")
+    {
+        return new GetFileTypeCommand(cmd_s.c_str());
     }
 
     return new ExternalCommand(cmd_line, cmd_s.c_str(), isBackground);
@@ -995,3 +1000,76 @@ void UnSetEnvCommand::execute()
         }
     }
 }
+
+// ------- GetFileTypeCommand --------------
+
+GetFileTypeCommand::GetFileTypeCommand(const char *cmd_line) : BuiltInCommand(cmd_line), m_fileName("")
+{
+    std::istringstream input(cmd_line);
+    std::string commandName, fileName, extraArgument;
+    input >> commandName;
+
+    if (!(input >> fileName) || input >> extraArgument)
+    {
+        Msg.rerr("getfiletype: invalid arguments");
+        return;
+    }
+
+    m_fileName = fileName;
+}
+
+void GetFileTypeCommand::execute()
+{
+    if (m_fileName == "")
+    {
+        return;
+    }
+
+    struct stat sb;
+    if (lstat(m_fileName.c_str(), &sb) == -1)
+    {
+        Msg.serr("lstat");
+        return;
+    }
+
+    std::string fileType;
+
+    switch (sb.st_mode & S_IFMT)
+    {
+    case S_IFBLK:
+        fileType = "block device";
+        break;
+    case S_IFCHR:
+        fileType = "character device";
+        break;
+    case S_IFDIR:
+        fileType = "directory";
+        break;
+    case S_IFIFO:
+        fileType = "FIFO";
+        break;
+    case S_IFLNK:
+        fileType = "symbolic link";
+        break;
+    case S_IFREG:
+        fileType = "regular file";
+        break;
+    case S_IFSOCK:
+        fileType = "socket";
+        break;
+    default:
+        fileType = "unknown";
+        break;
+    }
+
+    if (fileType == "unknown")
+    {
+        Msg.rerr("getfiletype: unknown file type");
+        return;
+    }
+
+    off_t sizeInBytes = sb.st_size;
+
+    const std::string message = m_fileName + "'s type is \"" + fileType + "\" and takes up " + std::to_string(sizeInBytes) + " bytes";
+    Msg.msg(message.c_str());
+};

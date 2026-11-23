@@ -366,6 +366,9 @@ public:
 
 class GetFileTypeCommand : public BuiltInCommand
 {
+private:
+    std::string m_fileName;
+
 public:
     GetFileTypeCommand(const char *cmd_line);
 
