@@ -48,6 +48,11 @@ const std::string INVALID_PATH = "-1";
 const char STAR = '*';
 const char QMARK = '?';
 
+static bool isOnlyDigits(const std::string &value)
+{
+    return !value.empty() && value.find_first_not_of("0123456789") == std::string::npos;
+}
+
 #if 0
 #define FUNC_ENTRY() \
     cout << __PRETTY_FUNCTION__ << " --> " << endl;
@@ -209,6 +214,10 @@ Command *SmallShell::CreateCommand(const char *cmd_line)
     else if (firstWord.compare("quit") == 0)
     {
         return new QuitCommand(cmd_s.c_str(), &m_jobsList);
+    }
+    else if (firstWord.compare("kill") == 0)
+    {
+        return new KillCommand(cmd_s.c_str(), &m_jobsList);
     }
 
     return new ExternalCommand(cmd_line, cmd_s.c_str(), isBackground);
@@ -570,7 +579,7 @@ JobsList::JobEntry *JobsList::getMaxJob()
 }
 
 ForegroundCommand::ForegroundCommand(const char *cmd_line, JobsList *jobs)
-    : BuiltInCommand(cmd_line), m_jib(0), m_foundJob(nullptr), m_jobs(jobs)
+    : BuiltInCommand(cmd_line), m_jid(-1), m_foundJob(nullptr), m_jobs(jobs)
 {
     // ASKED A QUESTION IN THE PIAZZA ABOUT THE ERROR MESSAGES - DO NOT SUBMIT WITHOUT MAKING SURE IT FITS THE GIVEN ANSWER
     std::istringstream input(cmd_line);
@@ -588,18 +597,19 @@ ForegroundCommand::ForegroundCommand(const char *cmd_line, JobsList *jobs)
     }
 
     std::istringstream jid(jobArgument);
-    // fail if there's an extra arg, or jid isn't a number, or a non valid job id
-    if ((input >> extraArgument) || !(jid >> m_jib) || !jid.eof())
+    if ((input >> extraArgument) ||
+        !isOnlyDigits(jobArgument) ||
+        !(jid >> m_jid))
     {
         Msg.rerr("fg: invalid arguments");
         return;
     }
 
-    m_foundJob = m_jobs->getJobById(m_jib);
+    m_foundJob = m_jobs->getJobById(m_jid);
 
     if (m_foundJob == nullptr)
     {
-        std::string message = "fg: job-id " + std::to_string(m_jib) + " does not exist";
+        std::string message = "fg: job-id " + std::to_string(m_jid) + " does not exist";
         Msg.rerr(message.c_str());
     }
 }
@@ -669,4 +679,52 @@ void JobsList::killAllJobs()
         }
     }
     updateCurrentJobId();
+}
+
+// ------- KillCommand --------------
+
+KillCommand::KillCommand(const char *cmd_line, JobsList *jobs) : BuiltInCommand(cmd_line), m_jid(-1), m_foundJob(nullptr), m_jobs(jobs), m_signal(-1)
+{
+    std::istringstream input(cmd_line);
+    std::string commandName, jobArgument, signalArgument, extraArgument;
+    if (!(input >> commandName >> signalArgument >> jobArgument) ||
+        (input >> extraArgument) || signalArgument.size() < 2 || signalArgument.front() != '-')
+    {
+        Msg.rerr("kill: invalid arguments");
+        return;
+    }
+
+    std::istringstream jid(jobArgument);
+    const std::string signalDigits = signalArgument.substr(1);
+    std::istringstream signal(signalDigits);
+    if (!isOnlyDigits(signalDigits) || !isOnlyDigits(jobArgument) ||
+        !(signal >> m_signal) || !(jid >> m_jid))
+    {
+        Msg.rerr("kill: invalid arguments");
+        return;
+    }
+
+    m_foundJob = m_jobs->getJobById(m_jid);
+
+    if (m_foundJob == nullptr)
+    {
+        std::string message = "kill: job-id " + std::to_string(m_jid) + " does not exist";
+        Msg.rerr(message.c_str());
+    }
+}
+
+void KillCommand::execute()
+{
+    if (m_foundJob == nullptr)
+    {
+        return;
+    }
+
+    if (kill(m_foundJob->getPid(), m_signal) == -1)
+    {
+        Msg.serr("kill");
+        return;
+    }
+    const std::string jobMsg = "signal number " + std::to_string(m_signal) + " was sent to pid " + std::to_string(m_foundJob->getPid());
+    Msg.msg(jobMsg.c_str());
 }

@@ -283,7 +283,12 @@ public:
 
 class KillCommand : public BuiltInCommand
 {
-    // TODO: Add your data members
+private:
+    int m_jid;
+    JobsList::JobEntry *m_foundJob;
+    JobsList *m_jobs;
+    int m_signal;
+
 public:
     KillCommand(const char *cmd_line, JobsList *jobs);
 
@@ -296,8 +301,8 @@ public:
 
 class ForegroundCommand : public BuiltInCommand
 {
-    // TODO: Add your data members
-    int m_jib;
+private:
+    int m_jid;
     JobsList::JobEntry *m_foundJob;
     JobsList *m_jobs;
 
