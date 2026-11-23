@@ -351,6 +351,9 @@ public:
 
 class UnSetEnvCommand : public BuiltInCommand
 {
+private:
+    std::vector<std::string> m_variables;
+
 public:
     UnSetEnvCommand(const char *cmd_line);
 

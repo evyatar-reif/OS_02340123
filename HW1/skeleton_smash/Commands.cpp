@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <vector>
 #include <sstream>
@@ -304,6 +305,10 @@ Command *SmallShell::CreateCommand(const char *cmd_line)
     else if (firstWord == "unalias")
     {
         return new UnAliasCommand(cmd_s.c_str());
+    }
+    else if (firstWord == "unsetenv")
+    {
+        return new UnSetEnvCommand(cmd_s.c_str());
     }
 
     return new ExternalCommand(cmd_line, cmd_s.c_str(), isBackground);
@@ -912,6 +917,81 @@ void UnAliasCommand::execute()
             const std::string message = "unalias: " + alias + " alias does not exist";
             Msg.rerr(message.c_str());
             return;
+        }
+    }
+}
+
+// ------- UnSetEnvCommand --------------
+
+UnSetEnvCommand::UnSetEnvCommand(const char *cmd_line) : BuiltInCommand(cmd_line), m_variables()
+{
+    std::istringstream input(cmd_line);
+    std::string commandName;
+    input >> commandName;
+
+    for (std::string variable; input >> variable;)
+    {
+        m_variables.push_back(variable);
+    }
+
+    if (m_variables.empty())
+    {
+        Msg.rerr("unsetenv: not enough arguments");
+    }
+}
+
+void UnSetEnvCommand::execute()
+{
+    if (m_variables.empty())
+    {
+        return;
+    }
+
+    const std::string path = "/proc/" + std::to_string(getpid()) + "/environ";
+    std::ifstream envFile(path, std::ios::binary);
+    if (!envFile)
+    {
+        Msg.serr("open");
+        return;
+    }
+
+    std::unordered_set<std::string> environmentNames;
+    std::string entry;
+    while (std::getline(envFile, entry, '\0'))
+    {
+        const auto equals = entry.find('=');
+        if (equals != std::string::npos)
+        {
+            environmentNames.insert(entry.substr(0, equals));
+        }
+    }
+    if (envFile.bad())
+    {
+        Msg.serr("read");
+        return;
+    }
+
+    for (const std::string &variable : m_variables)
+    {
+        if (environmentNames.erase(variable) == 0)
+        {
+            const std::string message = "unsetenv: " + variable + " does not exist";
+            Msg.rerr(message.c_str());
+            return;
+        }
+
+        const std::string prefix = variable + '=';
+        char **destination = __environ;
+        for (char **source = __environ; source != nullptr && *source != nullptr; ++source)
+        {
+            if (std::strncmp(*source, prefix.c_str(), prefix.size()) != 0)
+            {
+                *destination++ = *source;
+            }
+        }
+        if (destination != nullptr)
+        {
+            *destination = nullptr;
         }
     }
 }
