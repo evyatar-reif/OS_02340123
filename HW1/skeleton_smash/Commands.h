@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include <iosfwd>
+#include <utility>
 #include <sys/types.h>
 #define COMMAND_MAX_LENGTH (200)
 #define COMMAND_MAX_ARGS (20)
@@ -318,6 +319,11 @@ public:
 
 class AliasCommand : public BuiltInCommand
 {
+private:
+    std::string m_alias;
+    std::string m_command;
+    bool m_isBlank;
+
 public:
     AliasCommand(const char *cmd_line);
 
@@ -330,6 +336,9 @@ public:
 
 class UnAliasCommand : public BuiltInCommand
 {
+private:
+    std::vector<std::string> m_aliases;
+
 public:
     UnAliasCommand(const char *cmd_line);
 
@@ -371,6 +380,7 @@ private:
     std::string m_prompt;
     std::string m_lastPwd;
     JobsList m_jobsList;
+    std::vector<std::pair<std::string, std::string>> m_aliases;
     SmallShell();
 
 public:
@@ -389,6 +399,11 @@ public:
 
     void executeCommand(const char *cmd_line);
     void addJob(const std::string &cmdLine, pid_t pid, bool isStopped = false);
+    void printAlias(const std::pair<std::string, std::string> &alias) const;
+    void printAllAliases() const;
+    const std::pair<std::string, std::string> *findAlias(const std::string &name) const;
+    bool addAlias(const std::string &name, const std::string &command);
+    bool removeAlias(const std::string &name);
 
     // TODO: add extra methods as needed
     void setPrompt(const std::string &newPrompt);

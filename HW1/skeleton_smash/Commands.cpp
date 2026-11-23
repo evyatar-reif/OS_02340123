@@ -1,3 +1,6 @@
+#include <regex>
+#include <tuple>
+#include <unordered_set>
 #include <unistd.h>
 #include <cstdlib>
 #include <algorithm>
@@ -44,6 +47,22 @@ void MessageReporter::msg(const char *message) const
 
 const std::string WHITESPACE = " \n\r\t\f\v";
 const std::string INVALID_PATH = "-1";
+static const unordered_set<std::string> RESERVED_KEYWORDS = {
+    "chprompt",
+    "showpid",
+    "pwd",
+    "cd",
+    "jobs",
+    "fg",
+    "quit",
+    "kill",
+    "alias",
+    "unalias",
+    "unsetenv",
+    "getfiletype",
+    "du",
+    "whoami",
+};
 
 const char STAR = '*';
 const char QMARK = '?';
@@ -144,6 +163,55 @@ void SmallShell::addJob(const std::string &cmdLine, pid_t pid, bool isStopped)
     m_jobsList.addJob(cmdLine, pid, isStopped);
 }
 
+void SmallShell::printAlias(const std::pair<std::string, std::string> &alias) const
+{
+    const std::string line = alias.first + "='" + alias.second + "'";
+    Msg.msg(line.c_str());
+}
+
+void SmallShell::printAllAliases() const
+{
+    for (const auto &alias : m_aliases)
+    {
+        printAlias(alias);
+    }
+}
+
+const std::pair<std::string, std::string> *SmallShell::findAlias(const std::string &name) const
+{
+    for (const auto &alias : m_aliases)
+    {
+        if (alias.first == name)
+        {
+            return &alias;
+        }
+    }
+    return nullptr;
+}
+
+bool SmallShell::addAlias(const std::string &name, const std::string &command)
+{
+    if (RESERVED_KEYWORDS.count(name) != 0 || findAlias(name) != nullptr)
+    {
+        return false;
+    }
+    m_aliases.emplace_back(name, command);
+    return true;
+}
+
+bool SmallShell::removeAlias(const std::string &name)
+{
+    for (auto alias = m_aliases.begin(); alias != m_aliases.end(); ++alias)
+    {
+        if (alias->first == name)
+        {
+            m_aliases.erase(alias);
+            return true;
+        }
+    }
+    return false;
+}
+
 void SmallShell::setPrompt(const std::string &newPrompt)
 {
     m_prompt = newPrompt;
@@ -167,26 +235,36 @@ std::string SmallShell::getLastPwd() const
  */
 Command *SmallShell::CreateCommand(const char *cmd_line)
 {
-
-    string cmd_s = _trim(string(cmd_line));
+    std::string cmd_s = _trim(string(cmd_line));
+    bool isBackground = !cmd_s.empty() && cmd_s.back() == '&';
+    if (isBackground)
+    {
+        cmd_s.pop_back();
+        cmd_s = _rtrim(cmd_s);
+    }
     if (cmd_s.empty())
     {
         return nullptr;
     }
-    bool isBackground = _isBackgroundCommand(cmd_s.c_str());
-    if (isBackground)
+
+    std::string firstWord = cmd_s.substr(0, cmd_s.find_first_of(WHITESPACE));
+    if (auto *alias = findAlias(firstWord))
     {
-        _removeBackgroundSign(&cmd_s[0]);
-        cmd_s.resize(std::strlen(cmd_s.c_str()));
-        cmd_s = _rtrim(cmd_s);
+        cmd_s.replace(0, firstWord.size(), alias->second);
+        cmd_s = _trim(cmd_s);
+        if (!cmd_s.empty() && cmd_s.back() == '&')
+        {
+            isBackground = true;
+            cmd_s.pop_back();
+            cmd_s = _rtrim(cmd_s);
+        }
+        if (cmd_s.empty())
+        {
+            return nullptr;
+        }
+        firstWord = cmd_s.substr(0, cmd_s.find_first_of(WHITESPACE));
     }
 
-    if (cmd_s.empty()) // could be empty after removing & (if the line only has & and WHITESPACE)
-    {
-        return nullptr;
-    }
-
-    string firstWord = cmd_s.substr(0, cmd_s.find_first_of(WHITESPACE));
     if (firstWord.compare("chprompt") == 0)
     {
         return new ChPromptCommand(cmd_s.c_str());
@@ -218,6 +296,14 @@ Command *SmallShell::CreateCommand(const char *cmd_line)
     else if (firstWord.compare("kill") == 0)
     {
         return new KillCommand(cmd_s.c_str(), &m_jobsList);
+    }
+    else if (firstWord == "alias")
+    {
+        return new AliasCommand(cmd_s.c_str());
+    }
+    else if (firstWord == "unalias")
+    {
+        return new UnAliasCommand(cmd_s.c_str());
     }
 
     return new ExternalCommand(cmd_line, cmd_s.c_str(), isBackground);
@@ -727,4 +813,105 @@ void KillCommand::execute()
     }
     const std::string jobMsg = "signal number " + std::to_string(m_signal) + " was sent to pid " + std::to_string(m_foundJob->getPid());
     Msg.msg(jobMsg.c_str());
+}
+
+// ------- AliasCommand --------------
+
+static bool checkAliasLegality(const std::string &argument)
+{
+    static const std::regex pattern(R"([a-zA-Z0-9_]+='[^']*')");
+    return std::regex_match(argument, pattern);
+}
+
+std::pair<std::string, std::string> splitAliasCommand(std::string argument)
+{
+    const auto equals = argument.find('=');
+    return {
+        argument.substr(0, equals),
+        argument.substr(equals + 2, argument.size() - equals - 3)};
+}
+
+AliasCommand::AliasCommand(const char *cmd_line) : BuiltInCommand(cmd_line), m_alias(""), m_command(""), m_isBlank(false)
+{
+
+    std::istringstream input(cmd_line);
+    std::string commandName, secondArgument;
+
+    if (!(input >> commandName))
+    {
+        Msg.rerr("alias: invalid alias format");
+        return;
+    }
+
+    if (!(input >> secondArgument))
+    {
+        // command is only alias
+        m_isBlank = true;
+        return;
+    }
+
+    std::string remainder;
+    std::getline(input, remainder);
+    const std::string assignment = _rtrim(secondArgument + remainder);
+
+    if (!checkAliasLegality(assignment))
+    {
+        Msg.rerr("alias: invalid alias format");
+        return;
+    }
+
+    std::tie(m_alias, m_command) = splitAliasCommand(assignment);
+}
+
+void AliasCommand::execute()
+{
+    if (m_isBlank)
+    {
+        SmallShell::getInstance().printAllAliases();
+        return;
+    }
+
+    if (!m_alias.empty() && !SmallShell::getInstance().addAlias(m_alias, m_command))
+    {
+        const std::string message = "alias: " + m_alias + " already exists or is a reserved command";
+        Msg.rerr(message.c_str());
+    }
+}
+
+// ------- UnAliasCommand --------------
+
+UnAliasCommand::UnAliasCommand(const char *cmd_line) : BuiltInCommand(cmd_line)
+{
+    std::istringstream input(cmd_line);
+    std::string commandName;
+    input >> commandName;
+    std::string alias;
+    while (input >> alias)
+    {
+        m_aliases.push_back(alias);
+    }
+
+    if (m_aliases.empty())
+    {
+        Msg.rerr("unalias: not enough arguments");
+    }
+}
+
+void UnAliasCommand::execute()
+{
+    if (m_aliases.empty())
+    {
+        return;
+    }
+
+    for (std::string &alias : m_aliases)
+    {
+        if (!SmallShell::getInstance().removeAlias(alias))
+        {
+            // unalias: <name> alias does not exist
+            const std::string message = "unalias: " + alias + " alias does not exist";
+            Msg.rerr(message.c_str());
+            return;
+        }
+    }
 }
