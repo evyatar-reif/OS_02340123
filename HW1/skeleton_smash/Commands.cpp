@@ -284,6 +284,11 @@ Command *SmallShell::CreateCommand(const char *cmd_line)
         return new AliasCommand(cmd_s.c_str());
     }
 
+    if (cmd_s.find('|') != std::string::npos)
+    {
+        return new PipeCommand(cmd_s.c_str());
+    }
+
     if (cmd_s.find('>') != std::string::npos)
     {
         return new RedirectionCommand(cmd_s.c_str());
@@ -511,11 +516,11 @@ void ExternalCommand::execute()
         if (setpgrp() == -1)
         {
             Msg.serr("setpgrp");
-            _exit(1);
+            exit(1);
         }
         execvp(m_args[0], m_args);
         Msg.serr("execvp");
-        _exit(1);
+        exit(1);
     }
     else if (pid == -1)
     {
@@ -1135,7 +1140,7 @@ void GetFileTypeCommand::execute()
 
 // ------- DiskUsageCommand --------------
 
-struct DirEntry
+struct linux_dirent64
 {
     ino64_t d_ino;
     off64_t d_off;
@@ -1168,7 +1173,7 @@ off_t getSizeInBytes(const std::string &fileName)
         return -1;
     }
 
-    alignas(DirEntry) char buffer[4096];
+    alignas(linux_dirent64) char buffer[4096];
 
     while (true)
     {
@@ -1181,7 +1186,11 @@ off_t getSizeInBytes(const std::string &fileName)
                 continue;
             }
             Msg.serr("getdents64");
-            close(fd);
+            if (close(fd) == -1)
+            {
+                Msg.serr("close");
+                return -1;
+            }
             return -1;
         }
 
@@ -1193,7 +1202,7 @@ off_t getSizeInBytes(const std::string &fileName)
         for (long offset = 0; offset < bytesRead;)
         {
             const auto *entry =
-                reinterpret_cast<const DirEntry *>(buffer + offset);
+                reinterpret_cast<const linux_dirent64 *>(buffer + offset);
 
             offset += entry->d_reclen;
 
@@ -1208,7 +1217,11 @@ off_t getSizeInBytes(const std::string &fileName)
 
             if (childSize == -1)
             {
-                close(fd);
+                if (close(fd) == -1)
+                {
+                    Msg.serr("close");
+                    return -1;
+                }
                 return -1;
             }
 
@@ -1274,7 +1287,6 @@ void WhoAmICommand::execute()
 {
     const uid_t currentUid = getuid();
     int fd = open("/etc/passwd", O_RDONLY);
-
     if (fd == -1)
     {
         Msg.serr("open");
@@ -1410,13 +1422,190 @@ void RedirectionCommand::execute()
     // Send buffered output to the file before restoring stdout.
     std::cout.flush();
 
-    if (dup2(savedStdout, STDOUT_FILENO) == -1)
+    int restoreResult;
+    do
+    {
+        restoreResult = dup2(savedStdout, STDOUT_FILENO);
+    } while (restoreResult == -1 && (errno == EINTR || errno == EBUSY));
+
+    if (restoreResult == -1)
     {
         Msg.serr("dup2");
+        return; // Keep the saved descriptor open if restoration failed.
     }
 
     if (close(savedStdout) == -1)
     {
         Msg.serr("close");
+    }
+}
+
+// --------- PipeCommand ---------
+
+PipeCommand::PipeCommand(const char *cmd_line) : Command(cmd_line), m_isAmpersand(false), m_lhsCommand(""), m_rhsCommand("")
+{
+    std::string commandLine(cmd_line);
+    size_t position = commandLine.find('|');
+
+    m_isAmpersand = commandLine[position + 1] == '&';
+    size_t operatorLength = m_isAmpersand ? 2 : 1;
+
+    m_lhsCommand = _trim(commandLine.substr(0, position));
+    m_rhsCommand = _trim(commandLine.substr(position + operatorLength));
+}
+
+void PipeCommand::execute()
+{
+    if (m_lhsCommand == "" || m_rhsCommand == "")
+    {
+        return;
+    }
+    int pipeFd[2];
+    if (pipe(pipeFd) == -1)
+    {
+        Msg.serr("pipe");
+        return;
+    }
+
+    std::cout.flush();
+    std::cerr.flush();
+
+    pid_t leftPid = fork();
+    if (leftPid == -1)
+    {
+        Msg.serr("fork");
+        if (close(pipeFd[0]) == -1)
+        {
+            Msg.serr("close");
+        }
+        if (close(pipeFd[1]) == -1)
+        {
+            Msg.serr("close");
+        }
+        return;
+    }
+
+    if (leftPid == 0)
+    {
+        if (setpgrp() == -1)
+        {
+            Msg.serr("setpgrp");
+            exit(1);
+        }
+
+        int outputFd = m_isAmpersand ? STDERR_FILENO : STDOUT_FILENO;
+        if (dup2(pipeFd[1], outputFd) == -1)
+        {
+            Msg.serr("dup2");
+            exit(1);
+        }
+
+        if (close(pipeFd[0]) == -1)
+        {
+            Msg.serr("close");
+            exit(1);
+        }
+        if (close(pipeFd[1]) == -1)
+        {
+            Msg.serr("close");
+            exit(1);
+        }
+
+        SmallShell::getInstance().executeCommand(m_lhsCommand.c_str());
+
+        std::cout.flush();
+        std::cerr.flush();
+        exit(0);
+    }
+
+    pid_t rightPid = fork();
+    if (rightPid == -1)
+    {
+        Msg.serr("fork");
+        if (close(pipeFd[0]) == -1)
+        {
+            Msg.serr("close");
+        }
+        if (close(pipeFd[1]) == -1)
+        {
+            Msg.serr("close");
+        }
+
+        // Stop the first child because its reader couldn't be started.
+        if (kill(leftPid, SIGKILL) == -1)
+        {
+            Msg.serr("kill");
+        }
+
+        while (waitpid(leftPid, nullptr, 0) == -1)
+        {
+            if (errno != EINTR)
+            {
+                Msg.serr("waitpid");
+                break;
+            }
+        }
+        return;
+    }
+
+    if (rightPid == 0)
+    {
+        if (setpgrp() == -1)
+        {
+            Msg.serr("setpgrp");
+            exit(1);
+        }
+
+        // Child 2 reads stdin from the pipe.
+        if (dup2(pipeFd[0], STDIN_FILENO) == -1)
+        {
+            Msg.serr("dup2");
+            exit(1);
+        }
+
+        if (close(pipeFd[0]) == -1)
+        {
+            Msg.serr("close");
+            exit(1);
+        }
+        if (close(pipeFd[1]) == -1)
+        {
+            Msg.serr("close");
+            exit(1);
+        }
+
+        SmallShell::getInstance().executeCommand(m_rhsCommand.c_str());
+
+        std::cout.flush();
+        std::cerr.flush();
+        exit(0);
+    }
+
+    // Parent: neither reads nor writes through the pipe.
+    if (close(pipeFd[0]) == -1)
+    {
+        Msg.serr("close");
+    }
+    if (close(pipeFd[1]) == -1)
+    {
+        Msg.serr("close");
+    }
+
+    while (waitpid(leftPid, nullptr, 0) == -1)
+    {
+        if (errno != EINTR)
+        {
+            Msg.serr("waitpid");
+            break;
+        }
+    }
+
+    while (waitpid(rightPid, nullptr, 0) == -1)
+    {
+        if (errno != EINTR)
+        {
+            Msg.serr("waitpid");
+            break;
+        }
     }
 }

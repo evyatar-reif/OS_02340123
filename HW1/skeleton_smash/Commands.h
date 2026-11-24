@@ -105,6 +105,11 @@ public:
 class PipeCommand : public Command
 {
     // TODO: Add your data members
+private:
+    bool m_isAmpersand;
+    std::string m_lhsCommand;
+    std::string m_rhsCommand;
+
 public:
     PipeCommand(const char *cmd_line);
 
