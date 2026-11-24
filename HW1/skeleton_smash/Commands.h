@@ -88,6 +88,10 @@ public:
 class RedirectionCommand : public Command
 {
     // TODO: Add your data members
+    bool m_isDouble;
+    std::string m_command;
+    std::string m_outputPath;
+
 public:
     explicit RedirectionCommand(const char *cmd_line);
 

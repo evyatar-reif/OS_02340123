@@ -6,7 +6,7 @@
 
 namespace
 {
-volatile sig_atomic_t ctrlCKillError = 0;
+    volatile sig_atomic_t ctrlCKillError = 0;
 }
 
 void ctrlCHandler(int sig_num)

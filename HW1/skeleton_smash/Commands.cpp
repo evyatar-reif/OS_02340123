@@ -261,8 +261,8 @@ Command *SmallShell::CreateCommand(const char *cmd_line)
     {
         return nullptr;
     }
+    std::string firstWord = cmd_s.substr(0, cmd_s.find_first_of(WHITESPACE + ">|"));
 
-    std::string firstWord = cmd_s.substr(0, cmd_s.find_first_of(WHITESPACE));
     if (auto *alias = findAlias(firstWord))
     {
         cmd_s.replace(0, firstWord.size(), alias->second);
@@ -278,6 +278,15 @@ Command *SmallShell::CreateCommand(const char *cmd_line)
             return nullptr;
         }
         firstWord = cmd_s.substr(0, cmd_s.find_first_of(WHITESPACE));
+    }
+    if (firstWord == "alias")
+    {
+        return new AliasCommand(cmd_s.c_str());
+    }
+
+    if (cmd_s.find('>') != std::string::npos)
+    {
+        return new RedirectionCommand(cmd_s.c_str());
     }
 
     if (firstWord.compare("chprompt") == 0)
@@ -313,10 +322,6 @@ Command *SmallShell::CreateCommand(const char *cmd_line)
     else if (firstWord.compare("kill") == 0)
     {
         return new KillCommand(cmd_s.c_str(), &m_jobsList);
-    }
-    else if (firstWord == "alias")
-    {
-        return new AliasCommand(cmd_s.c_str());
     }
     else if (firstWord == "unalias")
     {
@@ -1332,5 +1337,86 @@ void WhoAmICommand::execute()
             Msg.msg(home.c_str());
             break;
         }
+    }
+}
+
+// ------- RedirectionCommand ------------
+
+RedirectionCommand::RedirectionCommand(const char *cmd_line) : Command(cmd_line),
+                                                               m_isDouble(false), m_command(""),
+                                                               m_outputPath("")
+{
+    std::string commandLine(cmd_line);
+    size_t position = commandLine.find('>');
+
+    m_isDouble = commandLine[position + 1] == '>';
+    size_t operatorLength = m_isDouble ? 2 : 1;
+
+    m_command = _trim(commandLine.substr(0, position));
+    m_outputPath = _trim(commandLine.substr(position + operatorLength));
+}
+
+void RedirectionCommand::execute()
+{
+
+    std::cout.flush();
+
+    // Save the terminal's stdout.
+    int savedStdout = dup(STDOUT_FILENO);
+    if (savedStdout == -1)
+    {
+        Msg.serr("dup");
+        return;
+    }
+
+    int flags = O_WRONLY | O_CREAT |
+                (m_isDouble ? O_APPEND : O_TRUNC);
+
+    int fileFd = open(m_outputPath.c_str(), flags, 0666);
+    if (fileFd == -1)
+    {
+        Msg.serr("open");
+        if (close(savedStdout) == -1)
+        {
+            Msg.serr("close");
+        }
+        return;
+    }
+
+    // point std::cout to fileFd
+    if (dup2(fileFd, STDOUT_FILENO) == -1)
+    {
+        Msg.serr("dup2");
+        if (close(fileFd) == -1)
+        {
+            Msg.serr("close");
+        }
+        if (close(savedStdout) == -1)
+        {
+            Msg.serr("close");
+        }
+        return;
+    }
+
+    if (close(fileFd) == -1)
+    {
+        Msg.serr("close");
+    }
+    else
+    {
+        SmallShell::getInstance().executeCommand(m_command.c_str());
+    }
+
+    // Send buffered output to the file before restoring stdout.
+    std::cout.flush();
+
+    if (dup2(savedStdout, STDOUT_FILENO) == -1)
+    {
+        Msg.serr("dup2");
+    }
+
+    if (close(savedStdout) == -1)
+    {
+        Msg.serr("close");
     }
 }
