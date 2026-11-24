@@ -2,6 +2,7 @@
 #define SMASH__SIGNALS_H_
 
 void ctrlCHandler(int sig_num);
+void reportCtrlCKillError();
 
 void alarmHandler(int sig_num);
 

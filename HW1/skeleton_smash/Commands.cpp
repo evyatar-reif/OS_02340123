@@ -9,13 +9,14 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
+#include <fcntl.h>
 #include <iostream>
 #include <vector>
 #include <sstream>
 #include <sys/wait.h>
 #include <iomanip>
 #include "Commands.h"
+#include "signals.h"
 #include <limits.h>
 #include <signal.h>
 #include <ostream>
@@ -154,7 +155,8 @@ const std::string &Command::getCmdLine() const
 BuiltInCommand::BuiltInCommand(const char *cmd_line)
     : Command(cmd_line) {}
 
-SmallShell::SmallShell() : m_prompt("smash"), m_lastPwd(INVALID_PATH) {}
+SmallShell::SmallShell() : m_prompt("smash"), m_lastPwd(INVALID_PATH),
+                           m_jobsList(), m_aliases(), m_fgPid(-1) {}
 
 SmallShell::~SmallShell()
 {
@@ -230,6 +232,16 @@ void SmallShell::setLastPwd(const std::string &newLastPwd)
 std::string SmallShell::getLastPwd() const
 {
     return m_lastPwd;
+}
+
+void SmallShell::setFgPid(pid_t pid)
+{
+    m_fgPid = pid;
+}
+
+pid_t SmallShell::getFgPid() const
+{
+    return m_fgPid;
 }
 
 /**
@@ -328,6 +340,7 @@ void SmallShell::executeCommand(const char *cmd_line)
         return;
     }
     cmd->execute();
+    reportCtrlCKillError();
     delete cmd;
 }
 
@@ -500,11 +513,14 @@ void ExternalCommand::execute()
             SmallShell::getInstance().addJob(getCmdLine(), pid);
             return;
         }
+
+        SmallShell::getInstance().setFgPid(pid);
         pid_t result;
         do
         {
             result = waitpid(pid, nullptr, 0);
         } while (result == -1 && errno == EINTR);
+        SmallShell::getInstance().setFgPid(-1);
 
         if (result == -1)
         {
@@ -723,10 +739,12 @@ void ForegroundCommand::execute()
     std::cout << m_foundJob->getCmdLine() << " " << m_foundJob->getPid() << std::endl;
     m_jobs->removeJobById(m_foundJob->getJobId());
 
+    SmallShell::getInstance().setFgPid(pid);
     do
     {
         result = waitpid(pid, nullptr, 0);
     } while (result == -1 && errno == EINTR);
+    SmallShell::getInstance().setFgPid(-1);
 
     if (result == -1)
     {
@@ -953,27 +971,52 @@ void UnSetEnvCommand::execute()
     }
 
     const std::string path = "/proc/" + std::to_string(getpid()) + "/environ";
-    std::ifstream envFile(path, std::ios::binary);
-    if (!envFile)
+    const int envFd = open(path.c_str(), O_RDONLY);
+    if (envFd == -1)
     {
         Msg.serr("open");
         return;
     }
 
+    std::string environment;
+    char buffer[4096];
+    for (;;)
+    {
+        const ssize_t bytesRead = read(envFd, buffer, sizeof(buffer));
+        if (bytesRead == 0)
+        {
+            break;
+        }
+        if (bytesRead == -1)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            Msg.serr("read");
+            if (close(envFd) == -1)
+            {
+                Msg.serr("close");
+            }
+            return;
+        }
+        environment.append(buffer, static_cast<std::size_t>(bytesRead));
+    }
+    if (close(envFd) == -1)
+    {
+        Msg.serr("close");
+        return;
+    }
+
     std::unordered_set<std::string> environmentNames;
-    std::string entry;
-    while (std::getline(envFile, entry, '\0'))
+    std::istringstream entries(environment);
+    for (std::string entry; std::getline(entries, entry, '\0');)
     {
         const auto equals = entry.find('=');
         if (equals != std::string::npos)
         {
             environmentNames.insert(entry.substr(0, equals));
         }
-    }
-    if (envFile.bad())
-    {
-        Msg.serr("read");
-        return;
     }
 
     for (const std::string &variable : m_variables)

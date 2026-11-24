@@ -387,6 +387,7 @@ private:
     std::string m_lastPwd;
     JobsList m_jobsList;
     std::vector<std::pair<std::string, std::string>> m_aliases;
+    pid_t m_fgPid;
     SmallShell();
 
 public:
@@ -417,6 +418,9 @@ public:
 
     void setLastPwd(const std::string &newLastPwd);
     std::string getLastPwd() const;
+
+    void setFgPid(pid_t pid);
+    pid_t getFgPid() const;
 
     std::string getCwd() const;
 };
