@@ -81,6 +81,7 @@ public:
     }
 
     void execute() override;
+    void executeInCurrentProcess();
 
     bool checkIsComplexCommand(const char *cmd_line) const;
 };
@@ -275,6 +276,7 @@ public:
     int getSize() const;
 
 private:
+    pid_t m_ownerPid;
     int m_currentJid;
     std::vector<JobEntry> m_jobs;
 };
@@ -416,7 +418,7 @@ public:
 
     ~SmallShell();
 
-    void executeCommand(const char *cmd_line);
+    void executeCommand(const char *cmd_line, bool alreadyForked = false);
     void addJob(const std::string &cmdLine, pid_t pid, bool isStopped = false);
     void printAlias(const std::pair<std::string, std::string> &alias) const;
     void printAllAliases() const;

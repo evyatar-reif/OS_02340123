@@ -281,7 +281,12 @@ Command *SmallShell::CreateCommand(const char *cmd_line)
     }
     if (firstWord == "alias")
     {
-        return new AliasCommand(cmd_s.c_str());
+        size_t next = cmd_s.find_first_not_of(WHITESPACE, firstWord.size());
+        if (next == std::string::npos ||
+            (cmd_s[next] != '>' && cmd_s[next] != '|'))
+        {
+            return new AliasCommand(cmd_s.c_str());
+        }
     }
 
     if (cmd_s.find('|') != std::string::npos)
@@ -352,13 +357,21 @@ Command *SmallShell::CreateCommand(const char *cmd_line)
     return new ExternalCommand(cmd_line, cmd_s.c_str(), isBackground);
 }
 
-void SmallShell::executeCommand(const char *cmd_line)
+void SmallShell::executeCommand(const char *cmd_line, bool alreadyForked)
 {
     m_jobsList.removeFinishedJobs();
     Command *cmd = CreateCommand(cmd_line);
     if (cmd == nullptr)
     {
         return;
+    }
+    if (alreadyForked)
+    {
+        auto *external = dynamic_cast<ExternalCommand *>(cmd);
+        if (external != nullptr)
+        {
+            external->executeInCurrentProcess();
+        }
     }
     cmd->execute();
     reportCtrlCKillError();
@@ -508,6 +521,13 @@ ExternalCommand::ExternalCommand(const char *cmd_line, const char *exec_line, bo
     }
 }
 
+void ExternalCommand::executeInCurrentProcess()
+{
+    execvp(m_args[0], m_args);
+    Msg.serr("execvp");
+    exit(1);
+}
+
 void ExternalCommand::execute()
 {
     pid_t pid = fork();
@@ -518,9 +538,7 @@ void ExternalCommand::execute()
             Msg.serr("setpgrp");
             exit(1);
         }
-        execvp(m_args[0], m_args);
-        Msg.serr("execvp");
-        exit(1);
+        executeInCurrentProcess();
     }
     else if (pid == -1)
     {
@@ -585,7 +603,7 @@ std::ostream &operator<<(std::ostream &out, const JobsList::JobEntry &job)
     return out << '[' << job.getJobId() << "] " << job.getCmdLine();
 }
 
-JobsList::JobsList() : m_currentJid(0), m_jobs() {}
+JobsList::JobsList() : m_ownerPid(getpid()), m_currentJid(0), m_jobs() {}
 
 JobsList::~JobsList() = default;
 
@@ -648,6 +666,11 @@ void JobsList::removeJobById(int jobId)
 
 void JobsList::removeFinishedJobs()
 {
+    if (getpid() != m_ownerPid)
+    {
+        return;
+    }
+
     for (std::size_t index = 0; index < m_jobs.size();)
     {
         JobEntry &job = m_jobs[index];
@@ -1511,7 +1534,7 @@ void PipeCommand::execute()
             exit(1);
         }
 
-        SmallShell::getInstance().executeCommand(m_lhsCommand.c_str());
+        SmallShell::getInstance().executeCommand(m_lhsCommand.c_str(), true);
 
         std::cout.flush();
         std::cerr.flush();
@@ -1574,7 +1597,7 @@ void PipeCommand::execute()
             exit(1);
         }
 
-        SmallShell::getInstance().executeCommand(m_rhsCommand.c_str());
+        SmallShell::getInstance().executeCommand(m_rhsCommand.c_str(), true);
 
         std::cout.flush();
         std::cerr.flush();
