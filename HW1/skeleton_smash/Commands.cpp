@@ -1,4 +1,5 @@
 #include <regex>
+#include <sys/syscall.h>
 #include <tuple>
 #include <sys/stat.h>
 #include <unordered_set>
@@ -1129,12 +1130,136 @@ void GetFileTypeCommand::execute()
 
 // ------- DiskUsageCommand --------------
 
-DiskUsageCommand::DiskUsageCommand(const char *cmd_line) : Command(cmd_line)
+struct DirEntry
 {
-    Msg.msg(cmd_line);
+    ino64_t d_ino;
+    off64_t d_off;
+    unsigned short d_reclen;
+    unsigned char d_type;
+    char d_name[1];
+};
+
+off_t getSizeInBytes(const std::string &fileName)
+{
+    struct stat sb;
+    if (lstat(fileName.c_str(), &sb) == -1)
+    {
+        Msg.serr("lstat");
+        return -1;
+    }
+
+    off_t totalSize = sb.st_blocks * 512;
+
+    if (!S_ISDIR(sb.st_mode))
+    {
+        return totalSize;
+    }
+
+    // this is a directory - need to handle
+    int fd = open(fileName.c_str(), O_RDONLY | O_DIRECTORY);
+    if (fd == -1)
+    {
+        Msg.serr("open");
+        return -1;
+    }
+
+    alignas(DirEntry) char buffer[4096];
+
+    while (true)
+    {
+        long bytesRead = syscall(SYS_getdents64, fd, buffer, sizeof(buffer));
+
+        if (bytesRead == -1)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            Msg.serr("getdents64");
+            close(fd);
+            return -1;
+        }
+
+        if (bytesRead == 0)
+        {
+            break;
+        }
+
+        for (long offset = 0; offset < bytesRead;)
+        {
+            const auto *entry =
+                reinterpret_cast<const DirEntry *>(buffer + offset);
+
+            offset += entry->d_reclen;
+
+            if (strcmp(entry->d_name, ".") == 0 ||
+                strcmp(entry->d_name, "..") == 0)
+            {
+                continue;
+            }
+
+            std::string childPath = fileName + "/" + entry->d_name;
+            off_t childSize = getSizeInBytes(childPath);
+
+            if (childSize == -1)
+            {
+                close(fd);
+                return -1;
+            }
+
+            totalSize += childSize;
+        }
+    }
+
+    if (close(fd) == -1)
+    {
+        Msg.serr("close");
+        return -1;
+    }
+
+    return totalSize;
 }
 
-void DiskUsageCommand::execute() {}
+DiskUsageCommand::DiskUsageCommand(const char *cmd_line) : Command(cmd_line), m_path("")
+{
+    std::istringstream input(cmd_line);
+    std::string commandName, path, extraArgument;
+    input >> commandName;
+
+    if (!(input >> path))
+    {
+        m_path = ".";
+        return;
+    }
+
+    if (input >> extraArgument)
+    {
+        Msg.rerr("du: too many arguments");
+        return;
+    }
+    m_path = path;
+}
+
+void DiskUsageCommand::execute()
+{
+    if (m_path == "")
+    {
+        return;
+    }
+
+    off_t totalSizeInBytes = getSizeInBytes(m_path); // we can assume the path is legal
+
+    if (totalSizeInBytes < 0)
+    {
+        return;
+    }
+
+    // ASKED IN PIAZZA ABOUT HANDLING HARDLINKS - DO NOT SUBMIT WITHOUT REVIEWING
+
+    off_t totalSizeInKB = (totalSizeInBytes + 1023) / 1024;
+    const std::string message = "Total disk usage: " + std::to_string(totalSizeInKB) + " KB";
+    Msg.msg(message.c_str());
+}
 
 // ------- WhoAmICommand --------------
 

@@ -113,6 +113,9 @@ public:
 
 class DiskUsageCommand : public Command
 {
+private:
+    std::string m_path;
+
 public:
     DiskUsageCommand(const char *cmd_line);
 
