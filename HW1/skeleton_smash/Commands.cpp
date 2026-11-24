@@ -301,6 +301,8 @@ Command *SmallShell::CreateCommand(const char *cmd_line)
     }
     else if (firstWord.compare("fg") == 0)
     {
+        // asked in piazza - what happens if a SIGSTOP is sent to a background command,
+        // then it's brought to the foreground by fg? MUST CHECK BEFORE SUBMISSION
         return new ForegroundCommand(cmd_s.c_str(), &m_jobsList);
     }
     else if (firstWord.compare("quit") == 0)
@@ -326,6 +328,14 @@ Command *SmallShell::CreateCommand(const char *cmd_line)
     else if (firstWord == "getfiletype")
     {
         return new GetFileTypeCommand(cmd_s.c_str());
+    }
+    else if (firstWord == "du")
+    {
+        return new DiskUsageCommand(cmd_s.c_str());
+    }
+    else if (firstWord == "whoami")
+    {
+        return new WhoAmICommand(cmd_s.c_str());
     }
 
     return new ExternalCommand(cmd_line, cmd_s.c_str(), isBackground);
@@ -1116,3 +1126,86 @@ void GetFileTypeCommand::execute()
     const std::string message = m_fileName + "'s type is \"" + fileType + "\" and takes up " + std::to_string(sizeInBytes) + " bytes";
     Msg.msg(message.c_str());
 };
+
+// ------- DiskUsageCommand --------------
+
+DiskUsageCommand::DiskUsageCommand(const char *cmd_line) : Command(cmd_line)
+{
+    Msg.msg(cmd_line);
+}
+
+void DiskUsageCommand::execute() {}
+
+// ------- WhoAmICommand --------------
+
+WhoAmICommand::WhoAmICommand(const char *cmd_line) : Command(cmd_line) {}
+
+void WhoAmICommand::execute()
+{
+    const uid_t currentUid = getuid();
+    int fd = open("/etc/passwd", O_RDONLY);
+
+    if (fd == -1)
+    {
+        Msg.serr("open");
+        return;
+    }
+
+    std::string content;
+    char buffer[4096];
+
+    for (;;)
+    {
+        const ssize_t bytesRead = read(fd, buffer, sizeof(buffer));
+        if (bytesRead == 0)
+        {
+            break;
+        }
+        if (bytesRead == -1)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            Msg.serr("read");
+            if (close(fd) == -1)
+            {
+                Msg.serr("close");
+            }
+            return;
+        }
+        content.append(buffer, static_cast<std::size_t>(bytesRead));
+    }
+    if (close(fd) == -1)
+    {
+        Msg.serr("close");
+        return;
+    }
+
+    std::istringstream stream(content);
+    std::string line;
+
+    while (std::getline(stream, line))
+    {
+        std::istringstream entry(line);
+
+        std::string username, password, uid, gid, gecos, home;
+
+        std::getline(entry, username, ':');
+        std::getline(entry, password, ':');
+        std::getline(entry, uid, ':');
+        std::getline(entry, gid, ':');
+        std::getline(entry, gecos, ':');
+        std::getline(entry, home, ':');
+
+        if (std::stoul(uid) == currentUid)
+        {
+            // Found the relevant user.
+            Msg.msg(username.c_str());
+            Msg.msg(uid.c_str());
+            Msg.msg(gid.c_str());
+            Msg.msg(home.c_str());
+            break;
+        }
+    }
+}
