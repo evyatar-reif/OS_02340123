@@ -1,6 +1,5 @@
 #include <regex>
 #include <sys/syscall.h>
-#include <tuple>
 #include <sys/stat.h>
 #include <unordered_set>
 #include <unistd.h>
@@ -889,50 +888,25 @@ void KillCommand::execute()
 
 // ------- AliasCommand --------------
 
-static bool checkAliasLegality(const std::string &argument)
-{
-    static const std::regex pattern(R"([a-zA-Z0-9_]+='[^']*')");
-    return std::regex_match(argument, pattern);
-}
-
-std::pair<std::string, std::string> splitAliasCommand(std::string argument)
-{
-    const auto equals = argument.find('=');
-    return {
-        argument.substr(0, equals),
-        argument.substr(equals + 2, argument.size() - equals - 3)};
-}
-
 AliasCommand::AliasCommand(const char *cmd_line) : BuiltInCommand(cmd_line), m_alias(""), m_command(""), m_isBlank(false)
 {
-
-    std::istringstream input(cmd_line);
-    std::string commandName, secondArgument;
-
-    if (!(input >> commandName))
+    const std::string command = _trim(cmd_line);
+    if (command == "alias")
     {
-        Msg.rerr("alias: invalid alias format");
-        return;
-    }
-
-    if (!(input >> secondArgument))
-    {
-        // command is only alias
         m_isBlank = true;
         return;
     }
 
-    std::string remainder;
-    std::getline(input, remainder);
-    const std::string assignment = _rtrim(secondArgument + remainder);
-
-    if (!checkAliasLegality(assignment))
+    static const std::regex pattern(R"(^alias ([a-zA-Z0-9_]+)='([^']*)'$)");
+    std::smatch match;
+    if (!std::regex_match(command, match, pattern))
     {
         Msg.rerr("alias: invalid alias format");
         return;
     }
 
-    std::tie(m_alias, m_command) = splitAliasCommand(assignment);
+    m_alias = match[1].str();
+    m_command = match[2].str();
 }
 
 void AliasCommand::execute()
