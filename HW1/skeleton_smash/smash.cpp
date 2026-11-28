@@ -12,7 +12,10 @@ int main(int argc, char *argv[])
         Msg.serr("signal");
     }
 
-    // TODO: setup sig alarm handler (timeout bonus)
+    if (!installTimeoutHandlers())
+    {
+        return 1;
+    }
 
     SmallShell &smash = SmallShell::getInstance();
     while (true)

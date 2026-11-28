@@ -21,10 +21,20 @@ public:
 
 extern const MessageReporter Msg;
 
+struct CommandTimeout
+{
+    unsigned int duration;
+    const std::string &commandLine;
+};
+
 class Command
 {
+    friend class SmallShell;
+
 protected:
     std::string m_cmdLine;
+    const CommandTimeout *m_timeout = nullptr;
+    bool m_alreadyForked = false;
 
 public:
     Command(const char *cmd_line);
@@ -150,9 +160,12 @@ public:
 
 class TimeoutCommand : public Command
 {
-    // TODO: Add your data members **BONUS: 10 Points**
+private:
+    unsigned int m_duration;
+    std::string m_command;
+
 public:
-    TimeoutCommand(const char *cmd_line);
+    TimeoutCommand(const char *cmd_line, const char *original_line = nullptr);
 
     virtual ~TimeoutCommand()
     {
@@ -418,7 +431,8 @@ public:
 
     ~SmallShell();
 
-    void executeCommand(const char *cmd_line, bool alreadyForked = false);
+    void executeCommand(const char *cmd_line, bool alreadyForked = false,
+                        const CommandTimeout *timeout = nullptr);
     void addJob(const std::string &cmdLine, pid_t pid, bool isStopped = false);
     void printAlias(const std::pair<std::string, std::string> &alias) const;
     void printAllAliases() const;

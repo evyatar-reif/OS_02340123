@@ -65,6 +65,7 @@ static const unordered_set<std::string> RESERVED_KEYWORDS = {
     "getfiletype",
     "du",
     "whoami",
+    "timeout",
 };
 
 const char STAR = '*';
@@ -247,22 +248,22 @@ pid_t SmallShell::getFgPid() const
 /**
  * Creates and returns a pointer to Command class which matches the given command line (cmd_line)
  */
-Command *SmallShell::CreateCommand(const char *cmd_line)
+static std::string firstCommandWord(const std::string &line)
 {
-    std::string cmd_s = _trim(string(cmd_line));
-    bool isBackground = !cmd_s.empty() && cmd_s.back() == '&';
+    return line.substr(0, line.find_first_of(WHITESPACE + ">|"));
+}
+
+static std::string expandCommandLine(const SmallShell &shell, const std::string &line, bool &isBackground)
+{
+    std::string cmd_s = _trim(line);
+    isBackground = !cmd_s.empty() && cmd_s.back() == '&';
     if (isBackground)
     {
         cmd_s.pop_back();
         cmd_s = _rtrim(cmd_s);
     }
-    if (cmd_s.empty())
-    {
-        return nullptr;
-    }
-    std::string firstWord = cmd_s.substr(0, cmd_s.find_first_of(WHITESPACE + ">|"));
-
-    if (auto *alias = findAlias(firstWord))
+    const std::string firstWord = firstCommandWord(cmd_s);
+    if (auto *alias = shell.findAlias(firstWord))
     {
         cmd_s.replace(0, firstWord.size(), alias->second);
         cmd_s = _trim(cmd_s);
@@ -272,25 +273,40 @@ Command *SmallShell::CreateCommand(const char *cmd_line)
             cmd_s.pop_back();
             cmd_s = _rtrim(cmd_s);
         }
-        if (cmd_s.empty())
-        {
-            return nullptr;
-        }
-        firstWord = cmd_s.substr(0, cmd_s.find_first_of(WHITESPACE));
     }
-    if (firstWord == "alias")
+    return cmd_s;
+}
+
+Command *SmallShell::CreateCommand(const char *cmd_line)
+{
+    const std::string originalLine(cmd_line);
+    bool isBackground;
+    std::string cmd_s = expandCommandLine(*this, originalLine, isBackground);
+    if (cmd_s.empty())
     {
-        size_t next = cmd_s.find_first_not_of(WHITESPACE, firstWord.size());
-        if (next == std::string::npos ||
-            (cmd_s[next] != '>' && cmd_s[next] != '|'))
-        {
-            return new AliasCommand(cmd_s.c_str());
-        }
+        return nullptr;
+    }
+
+    const std::string firstWord = firstCommandWord(cmd_s);
+    const size_t next = cmd_s.find_first_not_of(WHITESPACE, firstWord.size());
+    if (firstWord == "alias" &&
+        (next == std::string::npos || (cmd_s[next] != '>' && cmd_s[next] != '|')))
+    {
+        return new AliasCommand(cmd_s.c_str());
     }
 
     if (cmd_s.find('|') != std::string::npos)
     {
-        return new PipeCommand(cmd_s.c_str());
+        return new PipeCommand(originalLine.find('|') != std::string::npos ? cmd_line : cmd_s.c_str());
+    }
+
+    if (firstWord == "timeout" && (next == std::string::npos || cmd_s[next] != '>'))
+    {
+        if (isBackground)
+        {
+            cmd_s += " &";
+        }
+        return new TimeoutCommand(cmd_s.c_str(), cmd_line);
     }
 
     if (cmd_s.find('>') != std::string::npos)
@@ -356,7 +372,8 @@ Command *SmallShell::CreateCommand(const char *cmd_line)
     return new ExternalCommand(cmd_line, cmd_s.c_str(), isBackground);
 }
 
-void SmallShell::executeCommand(const char *cmd_line, bool alreadyForked)
+void SmallShell::executeCommand(const char *cmd_line, bool alreadyForked,
+                                const CommandTimeout *timeout)
 {
     m_jobsList.removeFinishedJobs();
     Command *cmd = CreateCommand(cmd_line);
@@ -364,6 +381,8 @@ void SmallShell::executeCommand(const char *cmd_line, bool alreadyForked)
     {
         return;
     }
+    cmd->m_timeout = timeout;
+    cmd->m_alreadyForked = alreadyForked;
     if (alreadyForked)
     {
         auto *external = dynamic_cast<ExternalCommand *>(cmd);
@@ -373,7 +392,7 @@ void SmallShell::executeCommand(const char *cmd_line, bool alreadyForked)
         }
     }
     cmd->execute();
-    reportCtrlCKillError();
+    reportSignalErrors();
     delete cmd;
 }
 
@@ -546,9 +565,14 @@ void ExternalCommand::execute()
     }
     else
     {
+        if (m_timeout != nullptr)
+        {
+            registerTimeout(m_timeout->duration, m_timeout->commandLine, pid);
+        }
         if (m_isBackground)
         {
-            SmallShell::getInstance().addJob(getCmdLine(), pid);
+            const std::string &jobLine = m_timeout != nullptr ? m_timeout->commandLine : getCmdLine();
+            SmallShell::getInstance().addJob(jobLine, pid);
             return;
         }
 
@@ -884,6 +908,53 @@ void KillCommand::execute()
     }
     const std::string jobMsg = "signal number " + std::to_string(m_signal) + " was sent to pid " + std::to_string(m_foundJob->getPid());
     Msg.msg(jobMsg.c_str());
+}
+
+// ------- TimeoutCommand --------------
+
+static bool parseTimeoutArguments(const std::string &line, unsigned int &duration, std::string &command)
+{
+    std::istringstream input(line);
+    std::string commandName, durationArgument;
+    if (!(input >> commandName >> durationArgument) || !std::getline(input, command))
+    {
+        return false;
+    }
+    command = _trim(command);
+
+    std::istringstream durationInput(durationArgument);
+    return isOnlyDigits(durationArgument) && (durationInput >> duration) &&
+           duration > 0 && !command.empty() && command != "&" &&
+           command.front() != '|' && command.front() != '>';
+}
+
+TimeoutCommand::TimeoutCommand(const char *cmd_line, const char *original_line)
+    : Command(original_line == nullptr ? cmd_line : original_line), m_duration(0)
+{
+    if (!parseTimeoutArguments(cmd_line, m_duration, m_command))
+    {
+        m_duration = 0;
+        Msg.rerr("timeout: invalid arguments");
+    }
+}
+
+void TimeoutCommand::execute()
+{
+    if (m_duration == 0)
+    {
+        return;
+    }
+
+    unsigned int duration = m_duration;
+    std::string originalLine = getCmdLine();
+    if (m_timeout != nullptr)
+    {
+        duration = std::min(duration, m_timeout->duration);
+        originalLine = m_timeout->commandLine;
+    }
+
+    const CommandTimeout timeout{duration, originalLine};
+    SmallShell::getInstance().executeCommand(m_command.c_str(), m_alreadyForked, &timeout);
 }
 
 // ------- AliasCommand --------------
@@ -1413,7 +1484,7 @@ void RedirectionCommand::execute()
     }
     else
     {
-        SmallShell::getInstance().executeCommand(m_command.c_str());
+        SmallShell::getInstance().executeCommand(m_command.c_str(), m_alreadyForked, m_timeout);
     }
 
     // Send buffered output to the file before restoring stdout.
@@ -1438,6 +1509,27 @@ void RedirectionCommand::execute()
 }
 
 // --------- PipeCommand ---------
+
+static unsigned int pipeSideTimeout(const SmallShell &shell, std::string command)
+{
+    unsigned int duration = 0;
+    while (true)
+    {
+        bool isBackground;
+        const std::string expanded = expandCommandLine(shell, command, isBackground);
+        if (firstCommandWord(expanded) != "timeout")
+        {
+            return duration;
+        }
+
+        unsigned int nextDuration = 0;
+        if (!parseTimeoutArguments(expanded, nextDuration, command))
+        {
+            return 0;
+        }
+        duration = duration == 0 ? nextDuration : std::min(duration, nextDuration);
+    }
+}
 
 PipeCommand::PipeCommand(const char *cmd_line) : Command(cmd_line), m_isAmpersand(false), m_lhsCommand(""), m_rhsCommand("")
 {
@@ -1576,6 +1668,23 @@ void PipeCommand::execute()
         std::cout.flush();
         std::cerr.flush();
         exit(0);
+    }
+
+    const SmallShell &shell = SmallShell::getInstance();
+    unsigned int leftDuration = pipeSideTimeout(shell, m_lhsCommand);
+    const std::string &leftLine = m_timeout == nullptr ? m_lhsCommand : m_timeout->commandLine;
+    if (m_timeout != nullptr && (leftDuration == 0 || m_timeout->duration < leftDuration))
+    {
+        leftDuration = m_timeout->duration;
+    }
+    if (leftDuration > 0)
+    {
+        registerTimeout(leftDuration, leftLine, leftPid);
+    }
+    const unsigned int rightDuration = pipeSideTimeout(shell, m_rhsCommand);
+    if (rightDuration > 0)
+    {
+        registerTimeout(rightDuration, m_rhsCommand, rightPid);
     }
 
     // Parent: neither reads nor writes through the pipe.
